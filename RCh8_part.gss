@@ -1,0 +1,664 @@
+@ ------------------------------ transition_part.gss -------------------------
+
+date: Dec 3, 2020
+
+author: Burkhard Heer
+
+
+computation of the dynamics in the heterogenous-agent neoclassical
+growth model with value function iteration
+
+transition dynamics for given initial distribution
+
+initial distribution: uniform
+
+distribution is characterized by the first moment
+
+-   linear interpolation between kbar (aggregate capital stock):
+
+-   linear interpolation between k (individual capital stock):
+
+-   Maximization: golden section search method
+    golden.g
+
+
+input procedures:
+golden -- routine for golden section search
+lininter -- linear interpolation
+
+-------------------------------------------------------------------------@
+
+
+new; 
+clear all; 
+cls; 
+library pgraph; 
+graphset; 
+
+h0=hsec;
+
+_print=1;           // 1 -- New versions of Gauss, e.g. Gauss 19, 0 -- older versions of Gauss
+                    // newer versions of Gauss have the plot command "struct" and "plotxy"
+                    
+                    
+@ ----------------------------------------------------------------
+
+Step 1: Parameterization and Initialization
+
+----------------------------------------------------------------- @
+
+tol=0.00001;           /* stopping criterion for final solution */
+tol1=1e-7;   /* stopping criterion for golden section search */
+eps=0.05; 
+alpha=0.36; 
+beta=0.995; 
+delta=0.005; 
+sigma=2; 
+r=0.005;
+w=4.7; 
+tau=0.015; 
+rep=0.25;
+load rep=repden;
+b=rep*(1-tau)*w;
+
+pp=(0.9565~0.0435|0.5~0.5); pp1=equivec1(pp);
+
+amin1=-2;                 /* asset grid individual agents */
+amax1=3000; 
+na=201; 
+zeta=(amax1-amin1)/(na-1)^2;
+a=seqa(amin1,(amax1-amin1)/(na-1),na);
+
+kmin=140; 
+kmax=340;       /* asset grid aggregate capital stock */
+nk=6; 
+zeta=(kmax-kmin)/(nk-1)^2; 
+k=kmin+zeta*(seqa(1,1,nk)-1)^2; /* non-linear asset grid */
+k=seqa(kmin,(kmax-kmin)/(nk-1),nk);
+
+nt=100;    /* number of transition periods */
+nt1=nt-1;     /* number of periods for OLS regression */
+
+/* initialization of the distribution functions */
+ng=3*na;
+ag=seqa(amin1,(amax1-amin1)/(ng-1),ng);
+
+/* initialization of the value function: */
+/* agents consume their income */
+
+ve=zeros(na,nk);    /* employed agents */
+vu=zeros(na,nk); /*unemployed agents */
+i=0;
+do until i==nk;
+    i=i+1;
+    ve[.,i]=u((1-tau)*r*a+(1-tau)*w);
+    vu[.,i]=u((1-tau)*r*a+b);
+endo; 
+ve=ve/(1-beta);        
+vu=vu/(1-beta);
+
+/* optimal consumption */
+copte=zeros(na,nk);           
+coptu=zeros(na,nk);
+
+/* optimal next-period assets */
+aopte=zeros(na,nk); 
+aoptu=zeros(na,nk);
+
+/* law of motion for capital: initial guess,
+ln(kbar')=gam0+gam1*ln(kbar) */
+gam0=0.09; 
+gam1=0.95;
+gam0=ln(330);
+gam1=0;
+
+phi1=0.5; /* updating of gam0,gam1 */
+
+nit=250;           /* number of iterations over value function */
+nq=50;              /* number of iterations over dynamics of capital stock */
+kritgam=1; 
+tolgam=0.00001;
+
+gam0q=zeros(nq,1); 
+gam1q=zeros(nq,1);
+kfq=zeros(nq,1);
+
+
+// initial distribution and capital stock 
+// uniform distribution on [-2,300]
+gk=zeros(ng,2);
+ng1=sumc(ag.<=300);
+// initial distribution and capital stock 
+gkold=gk;
+gkold[1:ng1,.]=ones(ng1,2)/(ng1);
+gkold=gkold.*pp1';
+
+
+q=0;
+do until q==nq or (kritgam<tolgam and q>30); 
+    q=q+1;  
+
+    @ ----------------------------------------------------------------
+
+    Step 2: Iteration of the value function over a and K
+
+    ----------------------------------------------------------------- @
+
+    crit=tol+1; 
+    neg=-1e10;
+
+    j=0;
+
+    do until (crit<tol and j>100) or (j==nit);
+        j=j+1; 
+        "iteration q~j: " q~j;
+        "gam0~gam1: " gam0~gam1;
+        "time elapsed: " etstr(hsec-h0); 
+        "error value function: " crit;
+
+        volde=ve; 
+        voldu=vu;
+        m=0;
+        do until m==nk;
+            m=m+1;
+            r=rrate(k[m],pp1[1]);
+            w=wage(k[m],pp1[1]);
+            tau=pp1[2]*w*rep/(k[m]^alpha*pp1[1]^(1-alpha)+pp1[2]*w*rep);            
+            b=(1-tau)*rep*w;
+            k1=exp(gam0+gam1*ln(k[m]));  /* next period aggregate capital stock */
+            ve1=zeros(na,1);    /* value function of employed with k'=k1 */
+            vu1=zeros(na,1);    /* value function of unemployed with k'=k1 */
+            i=0;
+            do until i==na;
+                i=i+1;
+                if k1<=kmin;
+                    ve1[i]=volde[i,1];
+                    vu1[i]=voldu[i,1];
+                elseif k1>=kmax;
+                    ve1[i]=volde[i,nk];
+                    vu1[i]=voldu[i,nk];
+                else;
+                    ve1[i]=lininter(k,volde[i,.]',k1);
+                    vu1[i]=lininter(k,voldu[i,.]',k1);
+                endif;
+            endo;
+            e=0;    /* iteration over the employment status */
+            do until e==2;  /* e=1 employed, e=2 unemployed */
+                e=e+1;
+                i=0;        /* iteration over asset grid a in period t */
+                l0=0;
+                do until i==na;
+                    i=i+1;
+                    l=l0;
+                    v0=neg;
+                    ax=amin1; bx=amin1; cx=amax1;
+                    do until l==na; /* iteration over a' in period t*1 */
+                        l=l+1;
+                        if e==1;
+                            c=(1+(1-tau)*r)*a[i]+(1-tau)*w-a[l];
+                         else;
+                            c=(1+(1-tau)*r)*a[i]+b-a[l];
+                        endif;
+                        if c>0;
+                            v1=bellman(a[i],a[l],e);
+                            if v1>v0;
+                                if e==1;
+                                    ve[i,m]=v1;
+                                else;
+                                    vu[i,m]=v1;
+                                endif;
+                                if l==1;
+                                    ax=a[1]; bx=a[1]; cx=a[2];
+                                elseif l==na;
+                                    ax=a[na-1]; bx=a[na]; cx=a[na];
+                                else;
+                                    ax=a[l-1]; bx=a[l]; cx=a[l+1];
+                                endif;
+                                v0=v1;
+                                l0=l-1;
+                            else;
+                                l=na;   /* concavity of value function */
+                            endif;
+                        else;
+                            l=na;
+                        endif;
+                    endo;   /* l=1,..,na */
+
+                    if ax==bx;  /* boundary optimum, ax=bx=a[1]  */
+                        bx=ax+eps*(a[2]-a[1]);
+                        if bellman(a[i],bx,e)<bellman(a[i],ax,e);
+                            if e==1;
+                                aopte[i,m]=a[1];
+                            else;
+                                aoptu[i,m]=a[1];
+                            endif;
+                        else;
+                            if e==1;
+                                aopte[i,m]=golden(&value1,ax,bx,cx,tol1);
+                            else;
+                                aoptu[i,m]=golden(&value1,ax,bx,cx,tol1);
+                            endif;
+                        endif;
+                    elseif bx==cx;  /* boundary optimum, bx=cx=a[n] */
+                        bx=cx-eps*(a[na]-a[na-1]);
+                        if bellman(a[i],bx,e)<bellman(a[i],cx,e);
+                            if e==1;
+                                aopte[i,m]=a[na];
+                            else;
+                                aoptu[i,m]=a[na];
+                            endif;
+                        else;
+                            if e==1;
+                                aopte[i,m]=golden(&value1,ax,bx,cx,tol1);
+                            else;
+                                aoptu[i,m]=golden(&value1,ax,bx,cx,tol1);
+                            endif;
+                        endif;
+                    else;
+                        if e==1;
+                            aopte[i,m]=golden(&value1,ax,bx,cx,tol1);
+                        else;
+                            aoptu[i,m]=golden(&value1,ax,bx,cx,tol1);
+                        endif;
+                    endif;
+
+                    if e==1;
+                        ve[i,m]=bellman(a[i],aopte[i,m],e);
+                    else;
+                        vu[i,m]=bellman(a[i],aoptu[i,m],e);
+                    endif;
+ /* j~m~i~aopte[i,m]~aoptu[i,m]; */
+               endo;   /* i=1,..na */
+            endo;   /* e=1,2 */
+        endo;   /* m=1..nk */
+        crit=meanc(abs(volde-ve)|abs(voldu-vu));
+        crit=meanc(crit);
+    endo;   /* j=1,..nit */
+
+    copte=(1+(1-tau)*r)*a+(1-tau)*w-aopte;
+    coptu=(1+(1-tau)*r)*a+b-aoptu;
+
+
+    save kcopte=copte,kcoptu=coptu,kaopte=aopte,kaoptu=aoptu;
+    save kve=ve,kvu=vu; 
+    save kk=k,ka=k;
+
+    "iteration q~j " q~j; 
+    "time elapsed: " etstr(hsec-h0);
+    "error value function: " crit;
+
+    @ ----------------------------------------------------------------
+
+    Step 3: Computation of the Dynamics of K
+
+    ----------------------------------------------------------------- @
+
+    if q==10; nt=2000; nt1=1000; endif;
+
+    kt=zeros(nt,1); 
+    copt0=zeros(na,2); 
+    aopt0=zeros(na,2);
+        
+    // initial distribution: uniform on [-2,300]    
+    gk =gkold;       
+    kk0=sumc(gk'*ag); /* initial aggregate capital stock */
+
+    t=1;
+    kt[1]=kk0;
+
+    do until t==nt; /* transition of distribution function */
+            w=wage(kk0,pp1[1]);
+            tau=pp1[2]*w*rep/(kk0^alpha*pp1[1]^(1-alpha)+pp1[2]*w*rep);            
+            b=(1-tau)*rep*w;
+        "iteration q: " q;
+        "transition t: " t;
+        "kk0~tau~b: " kk0~tau~b;
+        "gam0~gam1: " gam0~gam1;
+        if t==1;
+            save kgk1=gk;
+        endif;
+        if t==10;
+            save kgk10=gk;
+        endif;
+        if t==20;
+            save kgk20=gk;
+        endif;
+        if t==100;
+            save kgk100=gk;
+        endif;
+        
+        
+        
+        t=t+1;
+        i=0;
+        do until i==na;
+            i=i+1;
+            copt0[i,1]=lininter(k,copte[i,.]',kk0);
+            copt0[i,2]=lininter(k,coptu[i,.]',kk0);
+            aopt0[i,1]=lininter(k,aopte[i,.]',kk0);
+            aopt0[i,2]=lininter(k,aoptu[i,.]',kk0);
+        endo;
+        gk0=gk;
+        gk=zeros(ng,2);
+        l=0;
+        do until l==2;
+            l=l+1;
+            i=0;
+            do until i==ng;
+                i=i+1;
+                k0=ag[i];
+                if k0<=amin1;
+                    k1=aopt0[1,l];
+                elseif k0>=amax1;
+                    k1=aopt0[na,l];
+                else;
+                    k1=lininter(a,aopt0[.,l],k0);
+                endif;
+                if k1<=amin1;
+                    gk[1,1]=gk[1,1]+gk0[i,l]*pp[l,1];
+                    gk[1,2]=gk[1,2]+gk0[i,l]*pp[l,2];
+                elseif k1>=amax1;
+                    gk[ng,1]=gk[ng,1]+gk0[i,l]*pp[l,1];
+                    gk[ng,2]=gk[ng,2]+gk0[i,l]*pp[l,2];
+                elseif (k1>amin1) and (k1<amax1);
+                    j=sumc(ag.<=k1)+1;
+                    j=minc(j|ng);
+                    j=maxc(j|2);
+                    n0=(k1-ag[j-1])/(ag[j]-ag[j-1]);
+                    gk[j,1]=gk[j,1]+n0*gk0[i,l]*pp[l,1];
+                    gk[j,2]=gk[j,2]+n0*gk0[i,l]*pp[l,2];
+                    gk[j-1,1]=gk[j-1,1]+(1-n0)*gk0[i,l]*pp[l,1];
+                    gk[j-1,2]=gk[j-1,2]+(1-n0)*gk0[i,l]*pp[l,2];
+                endif;
+            endo;
+        endo;
+        gk=gk/sumc(sumc(gk));
+        kk1=gk'*ag;
+        kk0=sumc(kk1);
+        kt[t]=kk0;
+        if kk0>kmax; kk0=kmax; endif;
+        if kk0<kmin; kk0=kmin; endif;
+        kritg=sumc(abs(gk0-gk));
+    endo;   /* t=1,.., distribution dynamics */
+    save kgk=gk; 
+    save kag=ag;
+    "kritg: " kritg';
+
+/* ols-estimate gam0,gam1 */
+    xi=ln(kt[1:nt1]);
+    yi=ln(kt[2:nt1+1]);
+    xi=ones(rows(xi),1)~xi;
+    betai=inv(xi'*xi)*xi'*yi;
+    gam01=betai[1];
+    gam11=betai[2];
+
+    "gam0~gam1: " gam01~gam11;
+
+@
+    if q==10 or q==20 or q==30;
+        wait;
+        _plegctl=0;
+        title("Convergence of K");
+        xlabel("time");
+        xy(seqa(1,1,t),kt);
+        wait;
+        _plegctl=1;
+        _plegstr="K=100\000K=340\000K=500";
+        title("Value function of the employed worker");
+        xlabel("individual wealth a");
+        xy(a,ve[.,1]~ve[.,4]~ve[.,6]);
+        wait;
+        _plegctl=1;
+        _plegstr="K=100\000K=340\000K=500";
+        title("Savings of the employed worker");
+        xlabel("individual wealth a");
+        xy(a,aopte[.,1]-a~aopte[.,4]-a~aopte[.,6]-a);
+        wait; cls;
+    endif;
+    if q==20;
+        wait;
+        load kgk1,kgk10,kgk20;
+        title("Dynamics of the Distribution");
+        xlabel("individual wealth a");
+        _plegctl=1;
+        /* _plegctl={1 4 150000 290}; */
+        _plegstr="t=1\000t=10\000t=20\000t=1000";
+        xy(ag,kgk1[.,1]+kgk1[.,2]~kgk10[.,1]+kgk10[.,2]~kgk20[.,1]+kgk20[.,2]~gk[.,1]+gk[.,2]);
+        wait; 
+    endif;
+@
+
+    save kkt=kt;
+    kritgam=abs(ln(gam0)-ln(gam01))|abs(ln(gam1)-ln(gam11));
+    "kritgam: " kritgam';
+    gam0=phi1*gam0+(1-phi1)*gam01;
+    gam1=phi1*gam1+(1-phi1)*gam11;
+    save kgam0=gam0,kgam1=gam1;
+    gam0q[q]=gam0;
+    gam1q[q]=gam1;
+    kfq[q]=kk0;
+    if q==5 or q==10 or q==15 or q==20 or q==25 or q==30 or q==35 or q==40 or q==45;
+        cls;
+    endif;
+endo;   /* q=1,..,nq */
+
+        "convergence after iteration: " q; 
+wait;
+save gkpart=gk;
+save agpart=ag;
+
+
+if _print==1;
+    struct PlotControl myPlot;
+    myPlot=PlotGetDefaults("XY");
+   // PlotSetLineSymbol(&myPlot,-1|0);
+    PlotSetLineColor(&myPlot,"blue");
+    PlotSetLineColor(&myPlot,"black"$|"red"$|"blue"$|"green");
+    PlotSetLineThickness(&myPlot,7);
+    PlotSetXTicCount(&myPlot,8);
+    myPlot.axesLabel.font="Charter";
+    myPLot.axesLabel.fontSize=30;
+    myPlot.axes.font="Charter";
+    myPlot.axesNumbers.font="Charter";
+    myPlot.axesNumbers.fontSize=20;
+    myPlot.Legend.font="Charter";
+    myPlot.Legend.fontSize=30;
+    plotSetYLabel(&myPlot,"K");
+    plotSetXLabel(&myPlot,"Period t");
+    plotSetTitle(&myPlot,"");
+    PlotXY(myPlot,seqa(0,1,t),kt);
+    wait;
+
+
+    nplot=45;
+    // Place the first X-tick label at 0.5
+    // and place additional ticks every 0.25 after
+    plotSetXTicInterval(&myPlot, 0, 100);
+    plotSetTextInterpreter(&myPlot, "latex", "axes");
+    plotSetLegend(&myPlot,"K=140"$|"K=260"$|"K=340");     
+    plotSetYLabel(&myPlot,"V^e(a,K)");
+    plotSetXLabel(&myPlot,"a");
+    PlotXY(myPlot,a[1:nplot],ve[1:nplot,2]~ve[1:nplot,4]~ve[1:nplot,6]);
+    wait;
+
+    
+    plotSetTextInterpreter(&myPlot, "plain");    
+    plotSetLegend(&myPlot,"Employed, K=260"$|"Employed, K=260"$|"Unemployed, K=260");   
+    plotSetYLabel(&myPlot,"Savings a'- a");
+    plotSetXLabel(&myPlot,"Individual wealth a");
+    PlotXY(myPlot,a[1:nplot],aopte[1:nplot,4]-a[1:nplot]~aopte[1:nplot,6]-a[1:nplot]~aoptu[1:nplot,4]-a[1:nplot]);
+    
+    wait;
+    
+    
+        nplot = nplot*3;
+        load kgk1,kgk10,kgk20;
+        ag1=-2.0001|ag;
+        kgk11=0~0|kgk1;
+        kgk11=kgk11/(ag[2]-ag[1]);  // normalization of density to one
+        kgk101=0~0|kgk10;
+        kgk101=kgk101/(ag[2]-ag[1]);  // normalization of density to one
+        kgk201=0~0|kgk20;
+        kgk201=kgk201/(ag[2]-ag[1]);  // normalization of density to one
+        gk1=0~0|gk;
+        gk1=gk1/(ag[2]-ag[1]);  // normalization of density to one
+        
+    plotSetLegend(&myPlot,"t=0"$|"t=10"$|"t=20"$|"t=2000");   
+    plotSetYLabel(&myPlot,"Density");
+    plotSetXLabel(&myPlot,"Individual wealth a");
+    PlotXY(myPlot,ag1[1:nplot],kgk11[1:nplot,1]+kgk11[1:nplot,2]~kgk101[1:nplot,1]+kgk101[1:nplot,2]~kgk201[1:nplot,1]+kgk201[1:nplot,2]~gk1[1:nplot,1]+gk1[1:nplot,2]);
+        
+    wait;  
+
+else;
+
+
+        _plegctl=0;
+        title("Convergence of K");
+        xlabel("time");
+        xy(seqa(1,1,t),kt);
+        wait;
+        save kt;
+        _plegctl=1;
+        _plegstr="K=100\000K=340\000K=500";
+        title("Value function of the employed worker");
+        xlabel("individual wealth a");
+        xy(a,ve[.,1]~ve[.,5]~ve[.,nk]);
+        wait;
+        save ve,nk;
+        _plegctl=1;
+        _plegstr="K=100\000K=340\000K=500";
+        title("Savings of the employed worker");
+        xlabel("individual wealth a");
+        xy(a,aopte[.,1]-a~aopte[.,5]-a~aopte[.,nk]-a);
+        wait; 
+        save aopte,a;
+        load kgk1,kgk10,kgk20;
+        title("Dynamics of the Distribution");
+        xlabel("individual wealth a");
+        _plegctl=1;
+        /* _plegctl={1 4 150000 290}; */
+        _plegstr="t=1\000t=10\000t=20\000t=1000";
+        xy(ag,kgk1[.,1]+kgk1[.,2]~kgk10[.,1]+kgk10[.,2]~kgk20[.,1]+kgk20[.,2]~gk[.,1]+gk[.,2]);
+        
+endif;
+
+@  ----------------------------  procedures -----------
+
+
+u(x) -- utility function
+
+value(a,e) -- returns the value of the value function for asset
+                a and employment status e
+
+value1(x) -- given a=a[i] and epsilon=e, returns the
+             value of the bellman equation for a'=x
+
+bellman -- value for the right-hand side of the Bellman equation
+
+rrate -- computes the interest rate
+
+wage -- computes the wage rate
+
+equivec1 -- computes the ergodic distribution
+
+------------------------------------------------------- @
+
+proc u(x);
+   retp(x^(1-sigma)/(1-sigma));
+endp;
+
+
+
+proc value(x,y);
+    if y==1;
+        retp(lininter(a,ve1,x));
+    else;
+        retp(lininter(a,vu1,x));
+    endif;
+endp;
+
+proc value1(x);
+    retp(bellman(a[i],x,e));
+endp;
+
+
+proc bellman(a0,a1,y);
+   local c,k1;
+   if y==1;
+        c=(1+(1-tau)*r)*a0+(1-tau)*w-a1;
+   else;
+        c=(1+(1-tau)*r)*a0+b-a1;
+   endif;
+   if c<0;
+        retp(neg);
+   endif;
+   if a1>=a[na];
+        retp(u(c)+beta*(pp[y,1]*ve1[na]+pp[y,2]*vu1[na]));
+   endif;
+   if a1==a[1];
+        retp(u(c)+beta*(pp[y,1]*ve1[1]+pp[y,2]*vu1[1]));
+   endif;
+   retp(u(c)+beta*(pp[y,1]*value(a1,1)+pp[y,2]*value(a1,2)));
+endp;
+
+proc lininter(xd,yd,x);
+  local j;
+  j=sumc(xd.<=x');
+  j=minc(rows(xd)-1|j); 
+  retp(yd[j]+(yd[j+1]-yd[j]).*(x-xd[j])./(xd[j+1]-xd[j]));
+endp;
+
+proc golden(&f,ay,by,cy,tol);
+    local f:proc,x0,x1,x2,x3,xmin,r1,r2,f1,f2;
+    r1=0.61803399; r2=1-r1;
+    x0=ay;
+    x3=cy;
+    if abs(cy-by)<=abs(by-ay);
+        x1=by; x2=by+r2*(cy-by);
+    else;
+        x2=by; x1=by-r2*(by-ay);
+    endif;
+    f1=-f(x1);
+    f2=-f(x2);
+    do until abs(x3-x0)<=tol*(abs(x1)+abs(x2));
+        if f2<f1;
+            x0=x1;
+            x1=x2;
+            x2=r1*x1+r2*x3;
+            f1=f2;
+            f2=-f(x2);
+        else;
+            x3=x2;
+            x2=x1;
+            x1=r1*x2+r2*x0;
+            f2=f1;
+            f1=-f(x1);
+        endif;
+    endo;
+    if f1<=f2;
+        xmin=x1;
+        else;
+        xmin=x2;
+    endif;
+    retp(xmin);
+endp;
+
+proc rrate(x,y);
+    retp(alpha*x^(alpha-1)*y^(1-alpha)-delta);
+endp;
+
+proc wage(x,y);
+    retp((1-alpha)*x^(alpha)*y^(-alpha));
+endp;
+
+proc equivec1(p);
+    local n,x;
+    n=rows(p);
+    p=diagrv(p,diag(p)-ones(n,1));
+    p=p[.,1:n-1]~ones(n,1);
+    x=zeros(n-1,1)|1;
+    retp((x'*inv(p))');
+endp;
+
+
